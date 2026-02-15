@@ -15,6 +15,8 @@ Xyce
 - CMake 3.15 or higher
 - C++17 compatible compiler
 - gRPC and Protocol Buffers
+- glog and gflags
+- Python 3 and development headers (for embedded netlisting)
 - A SPICE simulator (ngspice, Xyce, etc.)
 
 ### Installing Dependencies
@@ -23,7 +25,9 @@ On Ubuntu/Debian:
 ```bash
 sudo apt-get update
 sudo apt-get install -y cmake build-essential
-sudo apt-get install -y libgrpc++-dev libprotobuf-dev protobuf-compiler-grpc
+sudo apt-get install -y libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc
+sudo apt-get install -y libgoogle-glog-dev libgflags-dev
+sudo apt-get install -y python3 python3-dev
 ```
 
 (UNTESTED) On macOS with Homebrew:
@@ -40,6 +44,9 @@ cmake ..
 make -j $(nproc)
 ```
 
+If CMake cannot find installed gRPC/ Protobuf/ glog configs, pass explicit
+package roots (e.g. `-DgRPC_DIR=...`, `-Dglog_DIR=...`) when configuring.
+
 ## Running
 
 Start the server (with port set to 50051):
@@ -51,6 +58,9 @@ You can provide override paths to the Python modules for `vlsirtools` and the
 Python VLSIR bindings with the `--python_vlsir` and `--python_vlsirtools` flags
 (see `src/netlister.cc` or `--help`).
 
+For requests using `vlsir_sim_input`, the embedded Python netlister also
+requires the Python modules `protobuf`, `vlsir`, and `vlsirtools` to be
+available in Python's import path.
 
 ## Using the example Python client to submit VLSIR netlists
 
@@ -106,4 +116,3 @@ It does this by invoking the python scripts directly from within the C++
 program. For now, the python scripts are pulled in directly from the vlsir_repo
 submodule in this repo. An alternative would to make them available as
 system-wide (or user-wide, or venv-wide) packages instead.
-
