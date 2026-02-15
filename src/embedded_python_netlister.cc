@@ -13,6 +13,7 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 
 #include "proto/spice_simulator.pb.h"
@@ -23,6 +24,53 @@ DEFINE_string(python_vlsir, "../vlsir_repo/bindings/python",
               "Path to generated python vlsir bindings.");
 
 namespace spiceserver {
+
+namespace {
+
+struct NetlisterSpec {
+  std::string import_stmt;
+  std::string class_name;
+  std::string extension;
+};
+
+absl::StatusOr<NetlisterSpec> GetNetlisterSpec(const Flavour &spice_flavour) {
+  switch (spice_flavour) {
+    case Flavour::SPECTRE:
+      return NetlisterSpec{
+          .import_stmt = "from vlsirtools.netlist.spectre import SpectreNetlister",
+          .class_name = "SpectreNetlister",
+          .extension = "scs",
+      };
+    case Flavour::NGSPICE:
+      return NetlisterSpec{
+          .import_stmt = "from vlsirtools.netlist.spice import NgspiceNetlister",
+          .class_name = "NgspiceNetlister",
+          .extension = "sp",
+      };
+    case Flavour::HSPICE:
+      return NetlisterSpec{
+          .import_stmt = "from vlsirtools.netlist.spice import HspiceNetlister",
+          .class_name = "HspiceNetlister",
+          .extension = "sp",
+      };
+    case Flavour::XYCE:
+    case Flavour::XYCE_7_8:
+    case Flavour::XYCE_7_9:
+    case Flavour::XYCE_7_10:
+      return NetlisterSpec{
+          .import_stmt = "from vlsirtools.netlist.spice import XyceNetlister",
+          .class_name = "XyceNetlister",
+          .extension = "sp",
+      };
+    case Flavour::UNSET:
+      break;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat(
+          "Unsupported simulator flavour: ", static_cast<int>(spice_flavour)));
+}
+
+}  // namespace
 
 void EmbeddedPythonNetlister::InitialisePython() {
   LOG(INFO) << "Starting Python";
@@ -76,6 +124,13 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSim(
     const vlsir::spice::SimInput &sim_input_pb,
     const Flavour &spice_flavour,
     const std::filesystem::path &output_directory) {
+  auto netlister_spec_or = GetNetlisterSpec(spice_flavour);
+  if (!netlister_spec_or.ok()) {
+    LOG(ERROR) << netlister_spec_or.status();
+    return {};
+  }
+  const NetlisterSpec &netlister_spec = *netlister_spec_or;
+
   // vlsirtools/spice contains classes that implement the conversion of
   // SimInput parameters to specific simulator commands (for including in the
   // top level deck). TODO(aryap):
@@ -97,7 +152,8 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSim(
     LOG(INFO) << "SimInput protobuf written to " << file_name;
   }
 
-  std::filesystem::path out_file_name = output_directory / "main.sp";
+  std::filesystem::path out_file_name =
+      output_directory / absl::StrCat("main.", netlister_spec.extension);
 
   std::string python_script = absl::StrCat("input_pb_name = '", file_name, "'\n");
   python_script += absl::StrCat(
@@ -105,16 +161,17 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSim(
   python_script +=
       "#import sys\n"
       "#print(sys.path)\n"
-      "import vlsir.spice_pb2 as spice_pb2\n"
-      "from vlsirtools.netlist.spice import XyceNetlister\n"
+      "import vlsir.spice_pb2 as spice_pb2\n";
+  python_script += netlister_spec.import_stmt + "\n";
+  python_script +=
       "sim_input_pb = spice_pb2.SimInput()\n"
       "with open(input_pb_name, 'rb') as in_file:\n"
       "  print('reading:', input_pb_name)\n"
       "  sim_input_pb.ParseFromString(in_file.read())\n"
       "with open(out_file_name, 'w') as out_file:\n"
-      "  print('writing:', out_file_name)\n"
-      "  netlister = XyceNetlister(out_file)\n"
-      "  netlister.write_sim_input(sim_input_pb)\n";
+      "  print('writing:', out_file_name)\n";
+  python_script += "  netlister = " + netlister_spec.class_name + "(out_file)\n";
+  python_script += "  netlister.write_sim_input(sim_input_pb)\n";
 
 
   VLOG(11) << "Running script:\n" << python_script;
@@ -130,6 +187,13 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSpice(
     const vlsir::circuit::Package &circuit_pb,
     const Flavour &spice_flavour,
     const std::filesystem::path &output_directory) {
+  auto netlister_spec_or = GetNetlisterSpec(spice_flavour);
+  if (!netlister_spec_or.ok()) {
+    LOG(ERROR) << netlister_spec_or.status();
+    return {};
+  }
+  const NetlisterSpec &netlister_spec = *netlister_spec_or;
+
   std::string file_name = (output_directory / std::filesystem::path(
       "vlsir_package.pb")).string();
   std::fstream output_file(
@@ -141,7 +205,8 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSpice(
     LOG(INFO) << "Circuit protobuf written to " << file_name;
   }
 
-  std::filesystem::path out_file_name = output_directory / "netlist.sp";
+  std::filesystem::path out_file_name =
+      output_directory / absl::StrCat("netlist.", netlister_spec.extension);
 
   std::string python_script = absl::StrCat("input_pb_name = '", file_name, "'\n");
   python_script += absl::StrCat(
@@ -149,16 +214,17 @@ std::vector<std::filesystem::path> EmbeddedPythonNetlister::WriteSpice(
   python_script +=
       "#import sys\n"
       "#print(sys.path)\n"
-      "import vlsir.circuit_pb2 as circuit_pb2\n"
-      "from vlsirtools.netlist.spice import XyceNetlister\n"
+      "import vlsir.circuit_pb2 as circuit_pb2\n";
+  python_script += netlister_spec.import_stmt + "\n";
+  python_script +=
       "package_pb = circuit_pb2.Package()\n"
       "with open(input_pb_name, 'rb') as in_file:\n"
       "  print('reading:', input_pb_name)\n"
       "  package_pb.ParseFromString(in_file.read())\n"
       "with open(out_file_name, 'w') as out_file:\n"
-      "  print('writing:', out_file_name)\n"
-      "  netlister = XyceNetlister(out_file)\n"
-      "  netlister.write_package(package_pb)\n";
+      "  print('writing:', out_file_name)\n";
+  python_script += "  netlister = " + netlister_spec.class_name + "(out_file)\n";
+  python_script += "  netlister.write_package(package_pb)\n";
 
 
   VLOG(11) << "Running script:\n" << python_script;
